@@ -36,6 +36,7 @@ def agent_loop(user_message: str,max_iterations:int=30)-> str:
         choice = response.choices[0]
 
         if choice.finish_reason == "stop":
+            messages.append(choice.message)
             return choice.message.content
         messages.append(choice.message)
 

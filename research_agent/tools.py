@@ -193,7 +193,3 @@ TOOL_FUNCTIONS = {
     "read_note": read_note,
     "list_notes": list_notes,
 }
-
-if __name__ == "__main__":
-   # print(search("假面骑士ZZZ 简介"))
-    print(fetch_page('https://zzsanyu.com/video/63140.html'))
