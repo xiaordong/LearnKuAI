@@ -34,6 +34,11 @@ SYSTEM_PROMPT = """你是一个研究助手，使用 Plan-and-Execute 模式工�
 3. 根据中间结果可以调整计划（再次调用 update_plan）
 4. 完成后给出综合结论，必要时保存为笔记
 
+错误处理：
+- 工具调用失败时，阅读返回的 JSON 错误信息中的 hint 字段，按建议操作
+- fetch_page 失败时，直接使用搜索结果中的摘要信息继续回答，不要反复重试
+- 某个搜索方向失败时，换一个关键词或搜索方向
+
 注意：
 - 先规划再执行，不要盲目搜索
 - 用简体中文回答
@@ -125,8 +130,26 @@ def execute_tool(tool_name: str, arguments_json: str) -> str:
         log.info(f"工具 {tool_name} 完成 ({elapsed:.1f}s)")
         return str(result)
     except Exception as e:
-        log.error(f"工具 {tool_name} 失败: {e}")
-        return f"工具执行失败: {e}"
+        error_type = type(e).__name__
+        log.error(f"工具 {tool_name} 失败 [{error_type}]: {e}")
+        return json.dumps({
+            "success": False,
+            "error": str(e),
+            "error_type": error_type,
+            "tool": tool_name,
+            "hint": _error_hint(tool_name, e)
+        }, ensure_ascii=False)
+
+
+def _error_hint(tool_name: str, error: Exception) -> str:
+    """根据错误类型返回修复建议"""
+    hints = {
+        "search": "请尝试更换关键词或稍后重试",
+        "fetch_page": "网页无法访问，建议使用搜索结果中的摘要信息继续回答",
+        "save_note": "检查标题是否包含特殊字符",
+        "read_note": "请先用 list_notes 确认笔记是否存在",
+    }
+    return hints.get(tool_name, "请尝试其他方式完成任务")
 
 
 def agent_loop(session_id: str, user_message: str, max_iterations: int = 30) -> str:
