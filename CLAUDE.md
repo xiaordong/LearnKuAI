@@ -35,8 +35,10 @@
 - 阶段 1：基础骨架 — Agent Loop ✅
 - 阶段 2：工具系统 — Tool Use ✅
 - 阶段 3：记忆系统 — Memory ✅
-- 阶段 4：规划能力 — Plan-and-Execute ✅（待测试）
-- 阶段 5：生产增强 — Production Ready（待开始）
+- 阶段 4：规划能力 — Plan-and-Execute ✅
+- 阶段 5：生产增强 — Production Ready ✅
+
+**5 个阶段全部完成。**
 
 ## 技术选型
 
@@ -46,7 +48,9 @@
 | LLM SDK | OpenAI Python SDK（兼容智谱 GLM）          |
 | 模型 | glm-4.7                              |
 | 接口地址 | https://open.bigmodel.cn/api/paas/v4 |
+| 搜索引擎 | duckduckgo-search（ddgs）              |
 | HTTP 请求 | httpx                                |
+| 数据库 | SQLite                               |
 | 配置管理 | .env + 环境变量                          |
 
 ## 编码规范

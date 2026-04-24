@@ -402,14 +402,15 @@ Agent Final Answer:
 ### 阶段 3：记忆系统
 - 状态：✅ 已完成
 - 笔记：
-  - 会话持久化：每轮对话自动保存为 JSON 文件（memory/ 目录）
+  - 会话持久化：SQLite 双表存储（sessions + messages）
   - 多会话支持：启动时可选新建或加载历史会话
   - 上下文压缩：messages 超过 100K 字符时，旧消息交给 LLM 生成摘要替换
-  - SDK 对象需通过 model_dump() 转为 dict 才能序列化为 JSON
+  - SDK 对象需通过 model_dump() 转为 dict 才能序列化
   - Context Window 200K tokens，实际控制阈值设为约 50%
+  - JSON → SQLite 迁移：追加消息只需 INSERT，不用重写全部数据
 
 ### 阶段 4：规划能力
-- 状态：✅ 已完成（待测试）
+- 状态：✅ 已完成
 - 笔记：
   - 从纯 ReAct 升级为 Plan-and-Execute 模式
   - 新增 update_plan / read_plan 工具，Agent 可维护研究计划
@@ -417,5 +418,13 @@ Agent Final Answer:
   - 计划存储在 memory/current_plan.md
 
 ### 阶段 5：生产增强
-- 状态：待开始
+- 状态：✅ 已完成
 - 笔记：
+  - 日志系统：logging 同时输出到控制台和 agent.log，记录 API 耗时、工具调用、错误
+  - API 重试：指数退避（1s → 2s → 4s），最多 3 次
+  - 安全护栏：工具调用校验层（工具名、必填参数、类型检查、URL 安全校验）
+  - SSRF 防护：fetch_page 禁止访问 localhost、私有 IP 段
+  - 自愈机制：结构化错误信息（JSON + hint），LLM 读取后自行修正
+  - 降级回退：fetch_page 失败时 LLM 自动降级到搜索摘要回答
+  - CSS/JS 清理：fetch_page 移除 style/script 块，避免无用信息污染上下文
+  - try-finally 保证异常时也保存会话
