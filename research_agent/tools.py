@@ -84,8 +84,6 @@ def _is_safe_url(url: str) -> bool:
 
 def fetch_page(url: str) -> str:
     """抓取网页内容，返回纯文本"""
-    if not _is_safe_url(url):
-        return "请求被拒绝：不允许访问内网地址"
     headers = {
         "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36"
     }

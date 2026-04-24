@@ -3,7 +3,7 @@ import logging
 import time
 from openai import OpenAI
 import config
-from research_agent.tools import TOOL_FUNCTIONS, get_tools
+from research_agent.tools import TOOL_FUNCTIONS, get_tools, _is_safe_url
 from research_agent.memory import (
     new_session, load_session, save_session,
     list_sessions, estimate_char_count, compress_messages
@@ -61,6 +61,60 @@ def _call_api(messages: list, max_retries: int = 3) -> object:
                 raise
 
 
+def _get_tool_schema(tool_name: str) -> dict | None:
+    """从 get_tools() 中查找指定工具的 schema"""
+    for tool in get_tools():
+        if tool["function"]["name"] == tool_name:
+            return tool["function"]
+    return None
+
+
+def validate_tool_call(tool_name: str, arguments_json: str) -> str | None:
+    """校验工具调用，返回 None 表示通过，返回字符串表示错误原因"""
+    # 1. 工具名是否存在
+    if tool_name not in TOOL_FUNCTIONS:
+        return f"未知工具: {tool_name}，可用工具: {', '.join(TOOL_FUNCTIONS.keys())}"
+
+    schema = _get_tool_schema(tool_name)
+    if not schema:
+        return f"工具 {tool_name} 的 schema 未找到"
+
+    # 解析参数
+    try:
+        args = json.loads(arguments_json) if arguments_json else {}
+    except json.JSONDecodeError:
+        return f"参数 JSON 格式错误: {arguments_json}"
+
+    params_schema = schema.get("parameters", {})
+    required = params_schema.get("required", [])
+    properties = params_schema.get("properties", {})
+
+    # 2. 必填参数检查
+    for key in required:
+        if key not in args:
+            return f"缺少必填参数: {key}"
+
+    # 3. 参数类型检查
+    type_map = {"string": str, "integer": int, "boolean": bool}
+    for key, value in args.items():
+        if key in properties:
+            expected_type = properties[key].get("type")
+            python_type = type_map.get(expected_type)
+            if python_type and not isinstance(value, python_type):
+                # 兼容：int 可以接受 float（JSON 数字默认解析为 float）
+                if python_type == int and isinstance(value, float) and value == int(value):
+                    args[key] = int(value)
+                    continue
+                return f"参数 {key} 类型错误: 期望 {expected_type}, 实际 {type(value).__name__}"
+
+    # 4. URL 安全校验
+    if tool_name == "fetch_page" and "url" in args:
+        if not _is_safe_url(args["url"]):
+            return f"请求被拒绝: 不允许访问内网地址 ({args['url']})"
+
+    return None
+
+
 def execute_tool(tool_name: str, arguments_json: str) -> str:
     try:
         func = TOOL_FUNCTIONS[tool_name]
@@ -110,7 +164,13 @@ def agent_loop(session_id: str, user_message: str, max_iterations: int = 30) -> 
                 print(f"\r[工具调用] {tool_name}({args_str})", end="", flush=True)
                 log.info(f"调用工具: {tool_name}({args_str[:100]})")
 
-                result = execute_tool(tool_name, args_json)
+                # 校验层
+                validation_error = validate_tool_call(tool_name, args_json)
+                if validation_error:
+                    log.warning(f"工具调用被拒绝: {validation_error}")
+                    result = f"工具调用被拒绝: {validation_error}"
+                else:
+                    result = execute_tool(tool_name, args_json)
 
                 messages.append({
                     "role": "tool",
