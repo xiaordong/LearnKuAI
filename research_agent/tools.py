@@ -9,6 +9,9 @@ from ddgs import DDGS
 NOTES_DIR   = Path("notes")
 NOTES_DIR.mkdir(exist_ok=True)
 
+PLAN_FILE = Path("memory") / "current_plan.md"
+PLAN_FILE.parent.mkdir(exist_ok=True)
+
 def save_note(title: str, content: str) -> str:
     # 清理文件名中的特殊字符
     title = title.replace("/", "_").replace("\\", "_")
@@ -36,6 +39,19 @@ def list_notes() -> str:
 
 def get_current_time()->str:
     return datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+
+
+def update_plan(plan: str) -> str:
+    """创建或更新当前研究计划"""
+    PLAN_FILE.write_text(plan, encoding="utf-8")
+    return "计划已更新"
+
+
+def read_plan() -> str:
+    """读取当前研究计划"""
+    if not PLAN_FILE.exists():
+        return "当前没有研究计划"
+    return PLAN_FILE.read_text(encoding="utf-8")
 
 
 def search(keywords: str, region: str = "wt-wt", timelimit: str | None = None, max_results: int = 10) -> str:
@@ -182,6 +198,35 @@ def get_tools():
                     "required": []
                 }
             }
+        },
+        {
+            "type": "function",
+            "function": {
+                "name": "update_plan",
+                "description": "创建或更新当前研究计划。在开始研究前制定计划，或在执行过程中根据新发现调整计划时使用。",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "plan": {
+                            "type": "string",
+                            "description": "研究计划内容，包含步骤列表和当前进度"
+                        }
+                    },
+                    "required": ["plan"]
+                }
+            }
+        },
+        {
+            "type": "function",
+            "function": {
+                "name": "read_plan",
+                "description": "读取当前的研究计划。当需要回顾计划进度或继续执行未完成的计划时使用。",
+                "parameters": {
+                    "type": "object",
+                    "properties": {},
+                    "required": []
+                }
+            }
         }
     ]
 
@@ -192,4 +237,6 @@ TOOL_FUNCTIONS = {
     "save_note": save_note,
     "read_note": read_note,
     "list_notes": list_notes,
+    "update_plan": update_plan,
+    "read_plan": read_plan,
 }

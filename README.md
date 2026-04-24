@@ -218,10 +218,11 @@ research_agent/
 | 项目 | 选择 | 理由 |
 |---|---|---|
 | 语言 | Python 3.11+ | AI 生态最成熟 |
-| LLM | Claude API（Anthropic SDK） | 工具调用能力强，设计理念先进 |
+| LLM | GLM-4.7（智谱，OpenAI SDK 兼容接口） | 中文能力强，通过 OpenAI SDK 调用 |
+| 搜索引擎 | duckduckgo-search（ddgs） | 免费、无需 API Key |
 | HTTP 请求 | `httpx` | 支持异步，API 简洁 |
-| 数据存储 | 本地 JSON 文件 | 阶段3 前不需要数据库 |
-| 配置管理 | `pydantic-settings` + `.env` | 类型安全，环境变量管理 |
+| 数据存储 | SQLite | 轻量数据库，无需额外服务，适合学习阶段 |
+| 配置管理 | `python-dotenv` + `.env` | 简单的环境变量管理 |
 
 ### 3.5 对话流程设计
 
@@ -383,20 +384,37 @@ Agent Final Answer:
 > 每个阶段完成后在此记录心得和疑问
 
 ### 阶段 1：基础骨架
-- 状态：待开始
+- 状态：✅ 已完成
 - 笔记：
+  - Agent Loop 的本质就是一个 while 循环：LLM 返回 tool_calls 时继续循环，返回 stop 时结束
+  - 消息格式：system → user → assistant(tool_calls) → tool(结果) → assistant(回答)
+  - finish_reason 是循环控制的关键字段
 
 ### 阶段 2：工具系统
-- 状态：待开始
+- 状态：✅ 已完成
 - 笔记：
+  - ACI 设计三原则：描述告诉 LLM 什么时候用、能做什么、返回什么
+  - 工具数量控制在 5-8 个最佳
+  - DDGS 搜索透传参数（region/timelimit），让 LLM 自行决定使用
+  - execute_tool 加 try-except，错误返回给 LLM 而不是崩掉 Agent
+  - fetch_page 处理 HTTP 错误（如 403），返回状态码而非抛异常
 
 ### 阶段 3：记忆系统
-- 状态：待开始
+- 状态：✅ 已完成
 - 笔记：
+  - 会话持久化：每轮对话自动保存为 JSON 文件（memory/ 目录）
+  - 多会话支持：启动时可选新建或加载历史会话
+  - 上下文压缩：messages 超过 100K 字符时，旧消息交给 LLM 生成摘要替换
+  - SDK 对象需通过 model_dump() 转为 dict 才能序列化为 JSON
+  - Context Window 200K tokens，实际控制阈值设为约 50%
 
 ### 阶段 4：规划能力
-- 状态：待开始
+- 状态：✅ 已完成（待测试）
 - 笔记：
+  - 从纯 ReAct 升级为 Plan-and-Execute 模式
+  - 新增 update_plan / read_plan 工具，Agent 可维护研究计划
+  - 不需要改架构，只改系统提示词 + 新增工具
+  - 计划存储在 memory/current_plan.md
 
 ### 阶段 5：生产增强
 - 状态：待开始
