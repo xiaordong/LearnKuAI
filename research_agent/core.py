@@ -52,34 +52,37 @@ def agent_loop(session_id: str, user_message: str, max_iterations: int = 30) -> 
     if estimate_char_count(messages) > 100000:
         messages = compress_messages(messages, client)
 
-    for _ in range(max_iterations):
-        response = client.chat.completions.create(
-            model=config.MODEL,
-            messages=messages,
-            tools=get_tools()
-        )
-        choice = response.choices[0]
+    try:
+        for _ in range(max_iterations):
+            response = client.chat.completions.create(
+                model=config.MODEL,
+                messages=messages,
+                tools=get_tools()
+            )
+            choice = response.choices[0]
 
-        if choice.finish_reason == "stop":
+            if choice.finish_reason == "stop":
+                messages.append(choice.message)
+                return choice.message.content
             messages.append(choice.message)
-            save_session(session_id, messages)
-            return choice.message.content
-        messages.append(choice.message)
 
-        for tool_call in choice.message.tool_calls:
-            tool_name = tool_call.function.name
-            args_json = tool_call.function.arguments
-            args_str = args_json if args_json else ""
+            for tool_call in choice.message.tool_calls:
+                tool_name = tool_call.function.name
+                args_json = tool_call.function.arguments
+                args_str = args_json if args_json else ""
 
-            print(f"\r[工具调用] {tool_name}({args_str})", end="", flush=True)
+                print(f"\r[工具调用] {tool_name}({args_str})", end="", flush=True)
 
-            result = execute_tool(tool_name, args_json)
+                result = execute_tool(tool_name, args_json)
 
-            messages.append({
-                "role": "tool",
-                "tool_call_id": tool_call.id,
-                "content": result
-            })
+                messages.append({
+                    "role": "tool",
+                    "tool_call_id": tool_call.id,
+                    "content": result
+                })
 
-    save_session(session_id, messages)
-    return "达到最大迭代次数，任务未完成"
+        return "达到最大迭代次数，任务未完成"
+    except Exception as e:
+        return f"发生错误: {e}"
+    finally:
+        save_session(session_id, messages)

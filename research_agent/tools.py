@@ -75,8 +75,12 @@ def fetch_page(url: str) -> str:
     resp = httpx.get(url, headers=headers, timeout=10, follow_redirects=True)
     if resp.status_code != 200:
         return f"请求失败，状态码: {resp.status_code}"
-    # 去掉 HTML 标签，提取纯文本
-    text = re.sub(r"<[^>]+>", "", resp.text)
+    html = resp.text
+    # 先移除 style 和 script 块（连同内容）
+    html = re.sub(r"<style[^>]*>.*?</style>", "", html, flags=re.DOTALL)
+    html = re.sub(r"<script[^>]*>.*?</script>", "", html, flags=re.DOTALL)
+    # 再去掉剩余 HTML 标签
+    text = re.sub(r"<[^>]+>", "", html)
     # 压缩多余空白
     text = re.sub(r"\s+", " ", text).strip()
     # 截断，防止撑爆 context window
