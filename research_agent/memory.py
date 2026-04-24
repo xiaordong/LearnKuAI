@@ -1,52 +1,145 @@
-"""会话记忆管理：对话持久化、加载、压缩"""
+"""会话记忆管理：SQLite 存储、上下文压缩"""
 import json
+import sqlite3
 from datetime import datetime
 from pathlib import Path
 
-MEMORY_DIR = Path("memory")
-MEMORY_DIR.mkdir(exist_ok=True)
+DB_PATH = Path("memory") / "sessions.db"
+DB_PATH.parent.mkdir(exist_ok=True)
+
+
+def _get_conn() -> sqlite3.Connection:
+    """获取数据库连接"""
+    conn = sqlite3.connect(str(DB_PATH))
+    conn.row_factory = sqlite3.Row
+    return conn
+
+
+def _init_db():
+    """初始化数据库表"""
+    conn = _get_conn()
+    conn.executescript("""
+        CREATE TABLE IF NOT EXISTS sessions (
+            id TEXT PRIMARY KEY,
+            title TEXT DEFAULT '',
+            created_at TEXT,
+            updated_at TEXT
+        );
+        CREATE TABLE IF NOT EXISTS messages (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            session_id TEXT NOT NULL,
+            role TEXT NOT NULL,
+            content TEXT,
+            tool_call_id TEXT,
+            tool_calls TEXT,
+            FOREIGN KEY (session_id) REFERENCES sessions(id)
+        );
+    """)
+    conn.commit()
+    conn.close()
+
+
+# 模块加载时初始化数据库
+_init_db()
+
+
+def _to_dict(msg) -> dict:
+    """将 SDK 对象或 dict 统一转为 dict"""
+    if isinstance(msg, dict):
+        return msg
+    if hasattr(msg, "model_dump"):
+        return msg.model_dump()
+    return {"role": "unknown", "content": str(msg)}
 
 
 def new_session() -> str:
     """创建新会话，返回 session_id"""
     session_id = datetime.now().strftime("session_%Y%m%d_%H%M%S")
-    _write_file(session_id, messages=[], title="")
+    now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    conn = _get_conn()
+    conn.execute(
+        "INSERT INTO sessions (id, title, created_at, updated_at) VALUES (?, '', ?, ?)",
+        (session_id, now, now)
+    )
+    conn.commit()
+    conn.close()
     return session_id
 
 
 def save_session(session_id: str, messages: list, title: str = ""):
-    """保存会话数据（自动将 SDK 对象转为 dict）"""
-    serializable = []
+    """保存会话数据：更新标题 + 全量替换消息"""
+    now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    conn = _get_conn()
+
+    # 更新会话标题和时间
+    if title:
+        conn.execute(
+            "UPDATE sessions SET title=?, updated_at=? WHERE id=?",
+            (title, now, session_id)
+        )
+    else:
+        conn.execute(
+            "UPDATE sessions SET updated_at=? WHERE id=?",
+            (now, session_id)
+        )
+
+    # 删除旧消息，重新插入
+    conn.execute("DELETE FROM messages WHERE session_id=?", (session_id,))
+
     for msg in messages:
-        if isinstance(msg, dict):
-            serializable.append(msg)
-        elif hasattr(msg, "model_dump"):
-            serializable.append(msg.model_dump())
-        else:
-            serializable.append({"role": "unknown", "content": str(msg)})
-    _write_file(session_id, messages=serializable, title=title)
+        msg_dict = _to_dict(msg)
+        role = msg_dict.get("role", "unknown")
+        content = msg_dict.get("content")
+        tool_call_id = msg_dict.get("tool_call_id")
+        tool_calls = msg_dict.get("tool_calls")
+        # tool_calls 是列表，需要序列化为 JSON
+        tool_calls_json = json.dumps(tool_calls, ensure_ascii=False) if tool_calls else None
+
+        conn.execute(
+            "INSERT INTO messages (session_id, role, content, tool_call_id, tool_calls) VALUES (?, ?, ?, ?, ?)",
+            (session_id, role, content, tool_call_id, tool_calls_json)
+        )
+
+    conn.commit()
+    conn.close()
 
 
 def load_session(session_id: str) -> list:
     """加载会话，返回 messages 列表"""
-    file_path = MEMORY_DIR / f"{session_id}.json"
-    if not file_path.exists():
-        return []
-    data = json.loads(file_path.read_text(encoding="utf-8"))
-    return data["messages"]
+    conn = _get_conn()
+    rows = conn.execute(
+        "SELECT role, content, tool_call_id, tool_calls FROM messages WHERE session_id=? ORDER BY id",
+        (session_id,)
+    ).fetchall()
+    conn.close()
+
+    messages = []
+    for row in rows:
+        msg = {"role": row["role"], "content": row["content"]}
+        if row["tool_call_id"]:
+            msg["tool_call_id"] = row["tool_call_id"]
+        if row["tool_calls"]:
+            msg["tool_calls"] = json.loads(row["tool_calls"])
+        messages.append(msg)
+    return messages
 
 
 def list_sessions() -> list[dict]:
     """列出所有会话，按更新时间倒序"""
-    sessions = []
-    for f in sorted(MEMORY_DIR.glob("*.json"), reverse=True):
-        data = json.loads(f.read_text(encoding="utf-8"))
-        sessions.append({
-            "id": data["id"],
-            "title": data.get("title", "无标题"),
-            "updated_at": data["updated_at"]
-        })
-    return sessions
+    conn = _get_conn()
+    rows = conn.execute(
+        "SELECT id, title, updated_at FROM sessions ORDER BY updated_at DESC"
+    ).fetchall()
+    conn.close()
+
+    return [
+        {
+            "id": row["id"],
+            "title": row["title"] or "无标题",
+            "updated_at": row["updated_at"]
+        }
+        for row in rows
+    ]
 
 
 def estimate_char_count(messages: list) -> int:
@@ -94,25 +187,3 @@ def compress_messages(messages: list, client) -> list:
     return system_msg + [
         {"role": "system", "content": f"[历史对话摘要]\n{summary}"}
     ] + recent
-
-
-def _write_file(session_id: str, messages: list, title: str):
-    """内部：写入会话文件"""
-    file_path = MEMORY_DIR / f"{session_id}.json"
-
-    if file_path.exists():
-        old_data = json.loads(file_path.read_text(encoding="utf-8"))
-        created_at = old_data["created_at"]
-        if not title:
-            title = old_data.get("title", "")
-    else:
-        created_at = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-
-    session_data = {
-        "id": session_id,
-        "title": title,
-        "created_at": created_at,
-        "updated_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-        "messages": messages
-    }
-    file_path.write_text(json.dumps(session_data, ensure_ascii=False, indent=2), encoding="utf-8")

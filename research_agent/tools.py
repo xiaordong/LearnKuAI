@@ -67,8 +67,25 @@ def search(keywords: str, region: str = "wt-wt", timelimit: str | None = None, m
     return "\n\n".join(formatted)
 
 
+def _is_safe_url(url: str) -> bool:
+    """检查 URL 是否安全（禁止访问内网地址）"""
+    from urllib.parse import urlparse
+    parsed = urlparse(url)
+    host = parsed.hostname or ""
+    # 禁止内网地址
+    blocked = ["localhost", "127.0.0.1", "0.0.0.0", "::1"]
+    if host.lower() in blocked:
+        return False
+    # 禁止私有 IP 段
+    if host.startswith("192.168.") or host.startswith("10.") or host.startswith("172."):
+        return False
+    return True
+
+
 def fetch_page(url: str) -> str:
     """抓取网页内容，返回纯文本"""
+    if not _is_safe_url(url):
+        return "请求被拒绝：不允许访问内网地址"
     headers = {
         "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36"
     }
