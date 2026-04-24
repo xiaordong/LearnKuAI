@@ -32,8 +32,11 @@
 
 ## 当前阶段
 
-- 阶段 1：基础骨架 — Agent Loop（进行中）
-- 阶段 2-5：待开始
+- 阶段 1：基础骨架 — Agent Loop ✅
+- 阶段 2：工具系统 — Tool Use ✅
+- 阶段 3：记忆系统 — Memory ✅
+- 阶段 4：规划能力 — Plan-and-Execute ✅（待测试）
+- 阶段 5：生产增强 — Production Ready（待开始）
 
 ## 技术选型
 
