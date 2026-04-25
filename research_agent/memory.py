@@ -1,5 +1,6 @@
-"""会话记忆管理：SQLite 存储、上下文压缩"""
+"""会话记忆管理：SQLite 存储、上下文压缩、日志持久化"""
 import json
+import logging
 import sqlite3
 from datetime import datetime
 from pathlib import Path
@@ -12,7 +13,49 @@ def _get_conn() -> sqlite3.Connection:
     """获取数据库连接"""
     conn = sqlite3.connect(str(DB_PATH))
     conn.row_factory = sqlite3.Row
+    conn.execute("PRAGMA journal_mode=WAL")
     return conn
+
+
+def clean_old_logs(retention_days: int = 7) -> int:
+    """清理超过保留期的日志，返回删除条数"""
+    conn = _get_conn()
+    cursor = conn.execute(
+        "DELETE FROM agent_logs WHERE created_at < datetime('now', ?)",
+        (f"-{retention_days} days",)
+    )
+    deleted = cursor.rowcount
+    conn.commit()
+    conn.close()
+    return deleted
+
+
+class SQLiteHandler(logging.Handler):
+    """自定义日志 Handler，将日志写入 SQLite"""
+
+    def emit(self, record: logging.LogRecord) -> None:
+        try:
+            # 从 logger 名提取 category：agent.tools → tools, agent.core.api → api
+            category = record.name.split(".")[-1]
+            session_id = getattr(record, "session_id", None)
+            tool_name = getattr(record, "tool_name", None)
+            duration_ms = getattr(record, "duration_ms", None)
+            message = record.getMessage()
+            # 截断过长消息，避免数据库膨胀
+            if len(message) > 500:
+                message = message[:500] + "..."
+            created_at = datetime.fromtimestamp(record.created).strftime("%Y-%m-%d %H:%M:%S.%f")[:-3]
+
+            conn = _get_conn()
+            conn.execute(
+                "INSERT INTO agent_logs (level, category, message, session_id, tool_name, duration_ms, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)",
+                (record.levelname, category, message, session_id, tool_name, duration_ms, created_at)
+            )
+            conn.commit()
+            conn.close()
+        except Exception:
+            # 日志 Handler 不能抛异常，否则会破坏被日志的系统
+            self.handleError(record)
 
 
 def _init_db():
@@ -34,9 +77,21 @@ def _init_db():
             tool_calls TEXT,
             FOREIGN KEY (session_id) REFERENCES sessions(id)
         );
+        CREATE TABLE IF NOT EXISTS agent_logs (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            level TEXT NOT NULL,
+            category TEXT NOT NULL,
+            message TEXT NOT NULL,
+            session_id TEXT,
+            tool_name TEXT,
+            duration_ms INTEGER,
+            created_at TEXT NOT NULL
+        );
     """)
     conn.commit()
     conn.close()
+    # 启动时清理过期日志（保留 7 天）
+    clean_old_logs(7)
 
 
 # 模块加载时初始化数据库

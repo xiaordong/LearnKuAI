@@ -3,23 +3,31 @@ import logging
 import time
 from openai import OpenAI
 import config
-from research_agent.tools import TOOL_FUNCTIONS, get_tools, _is_safe_url
+from research_agent.tools import TOOL_FUNCTIONS, get_tools, _is_safe_url, set_log_context
 from research_agent.memory import (
     new_session, load_session, save_session,
-    list_sessions, estimate_char_count, compress_messages
+    list_sessions, estimate_char_count, compress_messages,
+    SQLiteHandler
 )
 
-# 日志配置
+# 分层 logger：api 记录 API 调用，agent 记录循环控制
+log_api = logging.getLogger("agent.core.api")
+log_agent = logging.getLogger("agent.core.agent")
+
+# 屏蔽第三方库日志（只记录 agent.* 命名空间）
+for name in ["httpx", "ddgs", "primp", "httpcore", "urllib3"]:
+    logging.getLogger(name).setLevel(logging.WARNING)
+
+# 日志配置：控制台 + SQLite，不再写文件
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s [%(levelname)s] %(message)s",
     datefmt="%H:%M:%S",
     handlers=[
-        logging.FileHandler("agent.log", encoding="utf-8"),
+        SQLiteHandler(),
         logging.StreamHandler()
     ]
 )
-log = logging.getLogger("agent")
 
 client = OpenAI(
     api_key=config.API_KEY,
@@ -45,7 +53,7 @@ SYSTEM_PROMPT = """你是一个研究助手，使用 Plan-and-Execute 模式工�
 - 禁止编造信息，所有结论必须基于搜索到的真实内容"""
 
 
-def _call_api(messages: list, max_retries: int = 3) -> object:
+def _call_api(messages: list, adapter: logging.LoggerAdapter, max_retries: int = 3) -> object:
     """调用 LLM API，支持自动重试"""
     for attempt in range(max_retries):
         try:
@@ -55,11 +63,12 @@ def _call_api(messages: list, max_retries: int = 3) -> object:
                 messages=messages,
                 tools=get_tools()
             )
-            elapsed = time.time() - start
-            log.info(f"API 响应 ({elapsed:.1f}s) finish_reason={response.choices[0].finish_reason}")
+            elapsed_ms = int((time.time() - start) * 1000)
+            adapter.info(f"API 响应 finish_reason={response.choices[0].finish_reason}",
+                         extra={"duration_ms": elapsed_ms})
             return response
         except Exception as e:
-            log.warning(f"API 调用失败 (第{attempt+1}次): {e}")
+            adapter.warning(f"API 调用失败 (第{attempt+1}次): {e}")
             if attempt < max_retries - 1:
                 time.sleep(2 ** attempt)  # 指数退避：1s, 2s, 4s
             else:
@@ -120,18 +129,18 @@ def validate_tool_call(tool_name: str, arguments_json: str) -> str | None:
     return None
 
 
-def execute_tool(tool_name: str, arguments_json: str) -> str:
+def execute_tool(tool_name: str, arguments_json: str, adapter: logging.LoggerAdapter) -> str:
     try:
         func = TOOL_FUNCTIONS[tool_name]
         args = json.loads(arguments_json)
         start = time.time()
         result = func(**args)
-        elapsed = time.time() - start
-        log.info(f"工具 {tool_name} 完成 ({elapsed:.1f}s)")
+        elapsed_ms = int((time.time() - start) * 1000)
         return str(result)
     except Exception as e:
         error_type = type(e).__name__
-        log.error(f"工具 {tool_name} 失败 [{error_type}]: {e}")
+        adapter.error(f"工具 {tool_name} 失败 [{error_type}]: {e}",
+                      extra={"tool_name": tool_name})
         return json.dumps({
             "success": False,
             "error": str(e),
@@ -153,6 +162,11 @@ def _error_hint(tool_name: str, error: Exception) -> str:
 
 
 def agent_loop(session_id: str, user_message: str, max_iterations: int = 30) -> str:
+    # 创建带 session_id 的 LoggerAdapter，后续所有日志自动关联会话
+    adapter = logging.LoggerAdapter(log_agent, {"session_id": session_id})
+    # 同步设置 tools 的日志上下文
+    set_log_context(session_id)
+
     # 加载会话消息
     messages = load_session(session_id)
 
@@ -162,16 +176,19 @@ def agent_loop(session_id: str, user_message: str, max_iterations: int = 30) -> 
 
     # 添加用户消息
     messages.append({"role": "user", "content": user_message})
-    log.info(f"收到消息 (会话: {session_id[-8:]})")
+    adapter.info(f"收到消息 (会话: {session_id[-8:]})")
 
     # 检查是否需要压缩（阈值 100K 字符，约 50K tokens）
     if estimate_char_count(messages) > 100000:
-        log.info("触发上下文压缩")
+        adapter.info("触发上下文压缩")
         messages = compress_messages(messages, client)
+
+    # API 日志也关联同一个 session_id
+    api_adapter = logging.LoggerAdapter(log_api, {"session_id": session_id})
 
     try:
         for i in range(max_iterations):
-            response = _call_api(messages)
+            response = _call_api(messages, api_adapter)
             choice = response.choices[0]
 
             if choice.finish_reason == "stop":
@@ -185,15 +202,17 @@ def agent_loop(session_id: str, user_message: str, max_iterations: int = 30) -> 
                 args_str = args_json if args_json else ""
 
                 print(f"\r[工具调用] {tool_name}({args_str})", end="", flush=True)
-                log.info(f"调用工具: {tool_name}({args_str[:100]})")
+                adapter.info(f"调用工具: {tool_name}({args_str[:100]})",
+                             extra={"tool_name": tool_name})
 
                 # 校验层
                 validation_error = validate_tool_call(tool_name, args_json)
                 if validation_error:
-                    log.warning(f"工具调用被拒绝: {validation_error}")
+                    adapter.warning(f"工具调用被拒绝: {validation_error}",
+                                   extra={"tool_name": tool_name})
                     result = f"工具调用被拒绝: {validation_error}"
                 else:
-                    result = execute_tool(tool_name, args_json)
+                    result = execute_tool(tool_name, args_json, adapter)
 
                 messages.append({
                     "role": "tool",
@@ -201,10 +220,10 @@ def agent_loop(session_id: str, user_message: str, max_iterations: int = 30) -> 
                     "content": result
                 })
 
-        log.warning(f"达到最大迭代次数 ({max_iterations})")
+        adapter.warning(f"达到最大迭代次数 ({max_iterations})")
         return "达到最大迭代次数，任务未完成"
     except Exception as e:
-        log.error(f"Agent 循环异常: {e}")
+        adapter.error(f"Agent 循环异常: {e}")
         return f"发生错误: {e}"
     finally:
         save_session(session_id, messages)

@@ -1,10 +1,33 @@
 """所有工具函数定义，统一返回str格式"""
+import logging
 import re
+import threading
 from datetime import datetime
 from pathlib import Path
 
 import httpx
 from ddgs import DDGS
+
+log = logging.getLogger("agent.tools")
+
+# 线程局部变量，用于传递当前 session_id
+_thread_local = threading.local()
+
+
+def set_log_context(session_id: str):
+    """设置当前线程的日志上下文"""
+    _thread_local.session_id = session_id
+
+
+def _log_info(msg: str, **extra):
+    """带 session_id 的日志"""
+    extra["session_id"] = getattr(_thread_local, "session_id", None)
+    log.info(msg, extra=extra)
+
+
+def _log_warning(msg: str, **extra):
+    extra["session_id"] = getattr(_thread_local, "session_id", None)
+    log.warning(msg, extra=extra)
 
 NOTES_DIR   = Path("notes")
 NOTES_DIR.mkdir(exist_ok=True)
@@ -55,12 +78,15 @@ def read_plan() -> str:
 
 
 def search(keywords: str, region: str = "wt-wt", timelimit: str | None = None, max_results: int = 10) -> str:
+    start = datetime.now()
     results = DDGS().text(
         query=keywords,
         region=region,
         timelimit=timelimit,
         max_results=max_results
     )
+    elapsed = int((datetime.now() - start).total_seconds() * 1000)
+    _log_info("搜索完成", tool_name="search", duration_ms=elapsed)
     formatted = []
     for i, item in enumerate(results, 1):
         formatted.append(f"{i}. [{item['title']}]({item['href']})\n  {item['body']}")
@@ -84,11 +110,14 @@ def _is_safe_url(url: str) -> bool:
 
 def fetch_page(url: str) -> str:
     """抓取网页内容，返回纯文本"""
+    start = datetime.now()
     headers = {
         "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36"
     }
     resp = httpx.get(url, headers=headers, timeout=10, follow_redirects=True)
+    elapsed = int((datetime.now() - start).total_seconds() * 1000)
     if resp.status_code != 200:
+        _log_warning(f"请求失败 状态码:{resp.status_code}", tool_name="fetch_page", duration_ms=elapsed)
         return f"请求失败，状态码: {resp.status_code}"
     html = resp.text
     # 先移除 style 和 script 块（连同内容）
@@ -102,6 +131,7 @@ def fetch_page(url: str) -> str:
     max_length = 5000
     if len(text) > max_length:
         text = text[:max_length] + "\n\n[内容已截断]"
+    _log_info(f"抓取完成 长度:{len(text)}", tool_name="fetch_page", duration_ms=elapsed)
     return text
 
 
