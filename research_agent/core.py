@@ -83,7 +83,9 @@ def _call_api(messages: list, adapter: logging.LoggerAdapter, max_retries: int =
         except KeyboardInterrupt:
             raise  # 立即上抛，不重试
         except Exception as e:
-            adapter.warning(f"API 调用失败 (第{attempt+1}次): {e}")
+            import traceback
+            adapter.warning(f"API 调用失败 (第{attempt+1}次): {type(e).__name__}: {e}")
+            adapter.debug(traceback.format_exc())
             if attempt < max_retries - 1:
                 try:
                     time.sleep(2 ** attempt)  # 指数退避：1s, 2s, 4s
@@ -196,8 +198,8 @@ def agent_loop(session_id: str, user_message: str, max_iterations: int = 30, eve
     messages.append({"role": "user", "content": user_message})
     adapter.info(f"收到消息 (会话: {session_id[-8:]})")
 
-    # 检查是否需要压缩（阈值 50K 字符，约 25K tokens）
-    if estimate_char_count(messages) > 50000:
+    # 检查是否需要压缩（阈值 30K 字符，约 15K tokens）
+    if estimate_char_count(messages) > 30000:
         adapter.info("触发上下文压缩")
         messages = compress_messages(messages, client)
 
@@ -212,14 +214,20 @@ def agent_loop(session_id: str, user_message: str, max_iterations: int = 30, eve
     try:
         for i in range(max_iterations):
             _emit({"type": "thinking"})
+            adapter.info(f"第{i+1}轮 API 调用，上下文 {estimate_char_count(messages)} 字符")
+            # 检查是否有非 dict 的消息（SDK 对象）
+            non_dict = [i for i, m in enumerate(messages) if not isinstance(m, dict)]
+            if non_dict:
+                adapter.warning(f"发现 {len(non_dict)} 条非 dict 消息，位置: {non_dict[:5]}")
             response = _call_api(messages, api_adapter)
             choice = response.choices[0]
 
             if choice.finish_reason == "stop":
-                messages.append(choice.message)
+                msg_dict = choice.message.model_dump()
+                messages.append(msg_dict)
                 _emit({"type": "done", "content": choice.message.content})
                 return choice.message.content
-            messages.append(choice.message)
+            messages.append(choice.message.model_dump())
 
             # 并行执行同轮所有工具调用
             def _run_tool(tc):
@@ -290,7 +298,8 @@ def agent_loop(session_id: str, user_message: str, max_iterations: int = 30, eve
                             results.append((call_id, "unknown", f"执行失败: {e}", 0))
 
             # 按原始 tool_call 顺序组装消息（API 要求顺序一致）
-            result_map = {call_id: result for call_id, _, result, _ in results}
+            # 单个工具结果截断到 3000 字符，防止撑爆上下文
+            result_map = {call_id: result[:3000] for call_id, _, result, _ in results}
             for tool_call in tool_calls_list:
                 messages.append({
                     "role": "tool",
@@ -299,7 +308,7 @@ def agent_loop(session_id: str, user_message: str, max_iterations: int = 30, eve
                 })
 
             # 循环内检查上下文大小，防止工具结果累积撑爆
-            if estimate_char_count(messages) > 50000:
+            if estimate_char_count(messages) > 30000:
                 adapter.info("循环内触发上下文压缩")
                 messages = compress_messages(messages, client)
 
@@ -315,4 +324,11 @@ def agent_loop(session_id: str, user_message: str, max_iterations: int = 30, eve
         _emit({"type": "error", "message": str(e)})
         return f"发生错误: {e}"
     finally:
-        save_session(session_id, messages)
+        # 从首条用户消息自动生成标题
+        title = ""
+        for m in messages:
+            m_dict = m if isinstance(m, dict) else m.model_dump() if hasattr(m, "model_dump") else {}
+            if m_dict.get("role") == "user" and m_dict.get("content"):
+                title = m_dict["content"][:30].replace("\n", " ")
+                break
+        save_session(session_id, messages, title=title)

@@ -210,7 +210,8 @@ def estimate_char_count(messages: list) -> int:
     """估算 messages 的总字符数"""
     total = 0
     for msg in messages:
-        content = msg.get("content", "")
+        msg_dict = _to_dict(msg)
+        content = msg_dict.get("content", "")
         if content:
             total += len(content)
     return total
@@ -221,14 +222,15 @@ def compress_messages(messages: list, client) -> list:
     import config
 
     # 保留 system prompt
-    system_msg = [messages[0]] if messages and messages[0]["role"] == "system" else []
+    first = _to_dict(messages[0]) if messages else None
+    system_msg = [first] if first and first["role"] == "system" else []
 
     # 保留最近 10 条消息
     keep_recent = 10
-    recent = messages[-keep_recent:]
+    recent = [_to_dict(m) for m in messages[-keep_recent:]]
 
     # 需要压缩的旧消息
-    old = messages[len(system_msg):-keep_recent]
+    old = [_to_dict(m) for m in messages[len(system_msg):-keep_recent]]
     if not old:
         return messages
 

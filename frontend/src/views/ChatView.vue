@@ -39,6 +39,10 @@ onUnmounted(disconnect)
 // 将 WebSocket 事件转发给 MessageList 实时展示
 onEvent((event: AgentEvent) => {
   messageListRef.value?.handleEvent(event)
+  // agent 完成后刷新侧栏标题
+  if (event.type === 'done' || event.type === 'error') {
+    store.fetchSessions()
+  }
 })
 
 store.fetchSessions()
