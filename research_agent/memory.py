@@ -87,6 +87,15 @@ def _init_db():
             duration_ms INTEGER,
             created_at TEXT NOT NULL
         );
+        CREATE TABLE IF NOT EXISTS notes (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            session_id TEXT,
+            title TEXT NOT NULL,
+            content TEXT NOT NULL,
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL,
+            FOREIGN KEY (session_id) REFERENCES sessions(id)
+        );
     """)
     conn.commit()
     conn.close()

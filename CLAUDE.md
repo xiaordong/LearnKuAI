@@ -37,8 +37,9 @@
 - 阶段 3：记忆系统 — Memory ✅
 - 阶段 4：规划能力 — Plan-and-Execute ✅
 - 阶段 5：生产增强 — Production Ready ✅
+- 阶段 6：全栈 Web 化 ✅
 
-**5 个阶段全部完成。**
+**6 个阶段全部完成。**
 
 ## 技术选型
 
@@ -52,6 +53,11 @@
 | HTTP 请求 | httpx                                |
 | 数据库 | SQLite                               |
 | 配置管理 | .env + 环境变量                          |
+| 后端框架 | FastAPI + Uvicorn                    |
+| 前端框架 | Vue 3 + Vite + TypeScript            |
+| UI 库 | Naive UI（暗色主题）                     |
+| 实时通信 | WebSocket                            |
+| 部署 | Docker Compose                       |
 
 ## 编码规范
 

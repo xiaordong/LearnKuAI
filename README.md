@@ -428,3 +428,90 @@ Agent Final Answer:
   - 降级回退：fetch_page 失败时 LLM 自动降级到搜索摘要回答
   - CSS/JS 清理：fetch_page 移除 style/script 块，避免无用信息污染上下文
   - try-finally 保证异常时也保存会话
+
+### 阶段 6：全栈 Web 化
+- 状态：✅ 已完成
+- 笔记：
+  - 后端：FastAPI + Uvicorn，REST API 提供会话/笔记/日志 CRUD
+  - 前端：Vue 3 + TypeScript + Naive UI（暗色主题），三个页面（聊天/日志/笔记）
+  - 实时交互：WebSocket + ThreadPoolExecutor 桥接同步 Agent Loop
+  - Markdown 渲染：markdown-it + highlight.js 代码高亮
+  - 数据可视化：ECharts 日志统计（指标卡片 + 饼图 + 时间线折线图）
+  - 笔记存储：从文件系统迁移到 SQLite 数据库
+  - 部署：Docker Compose（前端 Nginx + 后端 Uvicorn）
+  - event_callback 最小侵入设计：agent_loop 新增可选参数，不破坏 CLI 兼容性
+
+---
+
+## 七、Web 应用架构
+
+### 项目结构
+
+```
+LearnKuAI/
+├── research_agent/          # 核心 Agent（保持不变）
+│   ├── core.py              # Agent Loop（新增 event_callback）
+│   ├── tools.py             # 工具定义（TOOL_FUNCTIONS 支持运行时替换）
+│   └── memory.py            # SQLite 存储（新增 notes 表）
+├── backend/                 # FastAPI 后端
+│   ├── app.py               # 入口 + CORS
+│   ├── ws.py                # WebSocket 端点
+│   ├── routes/
+│   │   ├── sessions.py      # 会话 CRUD
+│   │   ├── notes.py         # 笔记 CRUD + 下载
+│   │   └── logs.py          # 日志统计
+│   └── services/
+│       ├── agent_service.py # 同步→异步桥接
+│       ├── note_service.py  # 笔记数据库操作
+│       └── log_service.py   # 日志聚合查询
+├── frontend/                # Vue 3 前端
+│   ├── src/views/           # 聊天/日志/笔记页面
+│   ├── src/components/      # 组件（chat/logs/notes）
+│   ├── src/composables/     # useWebSocket
+│   └── src/api/             # axios 封装
+├── docker/                  # 部署配置
+│   ├── Dockerfile.backend
+│   ├── Dockerfile.frontend
+│   ├── nginx.conf
+│   └── docker-compose.yml
+├── main.py                  # CLI 入口（保留兼容）
+└── config.py                # 原有配置
+```
+
+### API 端点
+
+```
+WebSocket:  ws://host/ws/agent/{session_id}
+会话:       GET/POST /api/sessions, GET/DELETE/PATCH /api/sessions/{id}
+笔记:       GET /api/notes, GET /api/notes/{id}, GET /api/notes/{id}/download, DELETE /api/notes/{id}
+日志:       GET /api/logs, GET /api/logs/stats, GET /api/logs/timeline, GET /api/logs/tools
+```
+
+### 技术选型
+
+| 层 | 选择 |
+|---|---|
+| 后端 | FastAPI + Uvicorn |
+| 前端 | Vue 3 + Vite + TypeScript |
+| UI 库 | Naive UI（暗色主题） |
+| Markdown | markdown-it + highlight.js |
+| 图表 | ECharts（vue-echarts） |
+| 实时通信 | WebSocket |
+| 部署 | Docker Compose（前端 Nginx + 后端 Uvicorn） |
+
+### 本地开发
+
+```bash
+# 后端
+pip install -r requirements.txt
+cd .. && uvicorn backend.app:app --reload
+
+# 前端
+cd frontend
+npm install
+npm run dev
+
+# Docker 部署
+cd docker
+docker-compose up --build
+```

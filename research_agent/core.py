@@ -34,6 +34,15 @@ client = OpenAI(
     base_url=config.BASE_URL,
 )
 
+
+class MergeAdapter(logging.LoggerAdapter):
+    """LoggerAdapter 的 extra 与调用时 extra 合并，而非覆盖"""
+    def process(self, msg, kwargs):
+        extra = self.extra.copy()
+        extra.update(kwargs.get("extra", {}))
+        kwargs["extra"] = extra
+        return msg, kwargs
+
 SYSTEM_PROMPT = """你是一个研究助手，使用 Plan-and-Execute 模式工作。
 
 工作流程：
@@ -161,9 +170,9 @@ def _error_hint(tool_name: str, error: Exception) -> str:
     return hints.get(tool_name, "请尝试其他方式完成任务")
 
 
-def agent_loop(session_id: str, user_message: str, max_iterations: int = 30) -> str:
+def agent_loop(session_id: str, user_message: str, max_iterations: int = 30, event_callback=None) -> str:
     # 创建带 session_id 的 LoggerAdapter，后续所有日志自动关联会话
-    adapter = logging.LoggerAdapter(log_agent, {"session_id": session_id})
+    adapter = MergeAdapter(log_agent, {"session_id": session_id})
     # 同步设置 tools 的日志上下文
     set_log_context(session_id)
 
@@ -184,15 +193,25 @@ def agent_loop(session_id: str, user_message: str, max_iterations: int = 30) -> 
         messages = compress_messages(messages, client)
 
     # API 日志也关联同一个 session_id
-    api_adapter = logging.LoggerAdapter(log_api, {"session_id": session_id})
+    api_adapter = MergeAdapter(log_api, {"session_id": session_id})
+
+    def _emit(event: dict):
+        """安全调用 event_callback"""
+        if event_callback:
+            try:
+                event_callback(event)
+            except Exception:
+                pass
 
     try:
         for i in range(max_iterations):
+            _emit({"type": "thinking"})
             response = _call_api(messages, api_adapter)
             choice = response.choices[0]
 
             if choice.finish_reason == "stop":
                 messages.append(choice.message)
+                _emit({"type": "done", "content": choice.message.content})
                 return choice.message.content
             messages.append(choice.message)
 
@@ -201,9 +220,11 @@ def agent_loop(session_id: str, user_message: str, max_iterations: int = 30) -> 
                 args_json = tool_call.function.arguments
                 args_str = args_json if args_json else ""
 
-                print(f"\r[工具调用] {tool_name}({args_str})", end="", flush=True)
+                if not event_callback:
+                    print(f"\r[工具调用] {tool_name}({args_str})", end="", flush=True)
+                _emit({"type": "tool_call", "tool": tool_name, "args": args_str})
                 adapter.info(f"调用工具: {tool_name}({args_str[:100]})",
-                             extra={"tool_name": tool_name})
+                             extra={"tool_name": tool_name, "duration_ms": None})
 
                 # 校验层
                 validation_error = validate_tool_call(tool_name, args_json)
@@ -212,7 +233,10 @@ def agent_loop(session_id: str, user_message: str, max_iterations: int = 30) -> 
                                    extra={"tool_name": tool_name})
                     result = f"工具调用被拒绝: {validation_error}"
                 else:
+                    start_ts = time.time()
                     result = execute_tool(tool_name, args_json, adapter)
+                    duration_ms = int((time.time() - start_ts) * 1000)
+                    _emit({"type": "tool_result", "tool": tool_name, "result": result[:500], "duration_ms": duration_ms})
 
                 messages.append({
                     "role": "tool",
@@ -221,9 +245,11 @@ def agent_loop(session_id: str, user_message: str, max_iterations: int = 30) -> 
                 })
 
         adapter.warning(f"达到最大迭代次数 ({max_iterations})")
+        _emit({"type": "error", "message": f"达到最大迭代次数 ({max_iterations})"})
         return "达到最大迭代次数，任务未完成"
     except Exception as e:
         adapter.error(f"Agent 循环异常: {e}")
+        _emit({"type": "error", "message": str(e)})
         return f"发生错误: {e}"
     finally:
         save_session(session_id, messages)
