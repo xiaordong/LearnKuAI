@@ -1,6 +1,8 @@
 import json
 import logging
+import threading
 import time
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from openai import OpenAI
 import config
 from research_agent.tools import TOOL_FUNCTIONS, get_tools, _is_safe_url, set_log_context
@@ -58,28 +60,35 @@ SYSTEM_PROMPT = """你是一个研究助手，使用 Plan-and-Execute 模式工�
 
 注意：
 - 先规划再执行，不要盲目搜索
+- 多个独立的搜索任务，在一次回复中同时发起所有 search 调用（例如：需要搜索 A、B、C 三个主题时，在同一条消息中返回 3 个 tool_calls）
 - 用简体中文回答
 - 禁止编造信息，所有结论必须基于搜索到的真实内容"""
 
 
 def _call_api(messages: list, adapter: logging.LoggerAdapter, max_retries: int = 3) -> object:
-    """调用 LLM API，支持自动重试"""
+    """调用 LLM API，支持自动重试，超时 120 秒"""
     for attempt in range(max_retries):
         try:
             start = time.time()
             response = client.chat.completions.create(
                 model=config.MODEL,
                 messages=messages,
-                tools=get_tools()
+                tools=get_tools(),
+                timeout=120.0
             )
             elapsed_ms = int((time.time() - start) * 1000)
             adapter.info(f"API 响应 finish_reason={response.choices[0].finish_reason}",
                          extra={"duration_ms": elapsed_ms})
             return response
+        except KeyboardInterrupt:
+            raise  # 立即上抛，不重试
         except Exception as e:
             adapter.warning(f"API 调用失败 (第{attempt+1}次): {e}")
             if attempt < max_retries - 1:
-                time.sleep(2 ** attempt)  # 指数退避：1s, 2s, 4s
+                try:
+                    time.sleep(2 ** attempt)  # 指数退避：1s, 2s, 4s
+                except KeyboardInterrupt:
+                    raise  # sleep 期间也能中断
             else:
                 raise
 
@@ -187,8 +196,8 @@ def agent_loop(session_id: str, user_message: str, max_iterations: int = 30, eve
     messages.append({"role": "user", "content": user_message})
     adapter.info(f"收到消息 (会话: {session_id[-8:]})")
 
-    # 检查是否需要压缩（阈值 100K 字符，约 50K tokens）
-    if estimate_char_count(messages) > 100000:
+    # 检查是否需要压缩（阈值 50K 字符，约 25K tokens）
+    if estimate_char_count(messages) > 50000:
         adapter.info("触发上下文压缩")
         messages = compress_messages(messages, client)
 
@@ -196,12 +205,9 @@ def agent_loop(session_id: str, user_message: str, max_iterations: int = 30, eve
     api_adapter = MergeAdapter(log_api, {"session_id": session_id})
 
     def _emit(event: dict):
-        """安全调用 event_callback"""
+        """安全调用 event_callback，但取消信号要往上抛"""
         if event_callback:
-            try:
-                event_callback(event)
-            except Exception:
-                pass
+            event_callback(event)
 
     try:
         for i in range(max_iterations):
@@ -215,38 +221,95 @@ def agent_loop(session_id: str, user_message: str, max_iterations: int = 30, eve
                 return choice.message.content
             messages.append(choice.message)
 
-            for tool_call in choice.message.tool_calls:
-                tool_name = tool_call.function.name
-                args_json = tool_call.function.arguments
-                args_str = args_json if args_json else ""
+            # 并行执行同轮所有工具调用
+            def _run_tool(tc):
+                """执行单个工具调用，返回 (call_id, tool_name, result, duration_ms)"""
+                name = tc.function.name
+                args_json = tc.function.arguments or ""
+                args_str = args_json
 
+                # 设置线程局部变量，确保日志关联正确
+                set_log_context(session_id)
+
+                _emit({"type": "tool_call", "tool_call_id": tc.id, "tool": name, "args": args_str})
+                adapter.info(f"调用工具: {name}({args_str[:100]})",
+                             extra={"tool_name": name, "duration_ms": None})
                 if not event_callback:
-                    print(f"\r[工具调用] {tool_name}({args_str})", end="", flush=True)
-                _emit({"type": "tool_call", "tool": tool_name, "args": args_str})
-                adapter.info(f"调用工具: {tool_name}({args_str[:100]})",
-                             extra={"tool_name": tool_name, "duration_ms": None})
+                    print(f"\r[工具调用] {name}({args_str})", end="", flush=True)
 
-                # 校验层
-                validation_error = validate_tool_call(tool_name, args_json)
+                # 校验
+                validation_error = validate_tool_call(name, args_json)
                 if validation_error:
                     adapter.warning(f"工具调用被拒绝: {validation_error}",
-                                   extra={"tool_name": tool_name})
-                    result = f"工具调用被拒绝: {validation_error}"
-                else:
-                    start_ts = time.time()
-                    result = execute_tool(tool_name, args_json, adapter)
-                    duration_ms = int((time.time() - start_ts) * 1000)
-                    _emit({"type": "tool_result", "tool": tool_name, "result": result[:500], "duration_ms": duration_ms})
+                                   extra={"tool_name": name})
+                    return tc.id, name, f"工具调用被拒绝: {validation_error}", 0
 
+                start_ts = time.time()
+                # 单工具超时保护（30秒），防止 DDGS 等工具无限挂起
+                _tool_result = [None]
+                _tool_error = [None]
+                def _exec():
+                    try:
+                        _tool_result[0] = execute_tool(name, args_json, adapter)
+                    except Exception as e:
+                        _tool_error[0] = e
+                t = threading.Thread(target=_exec, daemon=True)
+                t.start()
+                t.join(timeout=30)
+                if t.is_alive():
+                    result = json.dumps({
+                        "success": False,
+                        "error": "工具执行超时（30秒）",
+                        "tool": name,
+                        "hint": "请尝试减少搜索范围或稍后重试"
+                    }, ensure_ascii=False)
+                elif _tool_error[0]:
+                    result = f"执行失败: {_tool_error[0]}"
+                else:
+                    result = _tool_result[0]
+                duration_ms = int((time.time() - start_ts) * 1000)
+                _emit({"type": "tool_result", "tool_call_id": tc.id, "tool": name,
+                       "result": result[:500], "duration_ms": duration_ms})
+                return tc.id, name, result, duration_ms
+
+            # 只有 1 个工具调用时直接执行，避免线程池开销
+            tool_calls_list = choice.message.tool_calls
+            if len(tool_calls_list) == 1:
+                results = [_run_tool(tool_calls_list[0])]
+            else:
+                results = []
+                with ThreadPoolExecutor(max_workers=min(len(tool_calls_list), 4)) as pool:
+                    futures = {pool.submit(_run_tool, tc): tc.id for tc in tool_calls_list}
+                    for future in as_completed(futures):
+                        try:
+                            results.append(future.result())
+                        except Exception as e:
+                            # 单个工具失败不影响其他工具，记录错误继续
+                            call_id = futures[future]
+                            adapter.error(f"并行工具执行失败: {e}")
+                            results.append((call_id, "unknown", f"执行失败: {e}", 0))
+
+            # 按原始 tool_call 顺序组装消息（API 要求顺序一致）
+            result_map = {call_id: result for call_id, _, result, _ in results}
+            for tool_call in tool_calls_list:
                 messages.append({
                     "role": "tool",
                     "tool_call_id": tool_call.id,
-                    "content": result
+                    "content": result_map.get(tool_call.id, "执行失败")
                 })
+
+            # 循环内检查上下文大小，防止工具结果累积撑爆
+            if estimate_char_count(messages) > 50000:
+                adapter.info("循环内触发上下文压缩")
+                messages = compress_messages(messages, client)
 
         adapter.warning(f"达到最大迭代次数 ({max_iterations})")
         _emit({"type": "error", "message": f"达到最大迭代次数 ({max_iterations})"})
         return "达到最大迭代次数，任务未完成"
+    except KeyboardInterrupt:
+        adapter.info("用户中断 Agent 循环")
+        _emit({"type": "error", "message": "已中断"})
+        return "已中断"
     except Exception as e:
         adapter.error(f"Agent 循环异常: {e}")
         _emit({"type": "error", "message": str(e)})

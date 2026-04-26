@@ -17,6 +17,12 @@ function wsUrl() {
 
 const { connected, running, errorMsg, connect, disconnect, send, cancel, onEvent } = useWebSocket(wsUrl)
 
+function handleCancel() {
+  cancel()
+  // 立即清除 MessageList 的思考/工具调用状态
+  messageListRef.value?.handleEvent({ type: 'error', message: '已取消' })
+}
+
 // 会话切换时重连 WebSocket
 watch(() => store.currentId, async (id) => {
   if (id) {
@@ -47,7 +53,7 @@ store.fetchSessions()
         {{ errorMsg || 'WebSocket 未连接，请检查后端是否运行' }}
       </div>
       <MessageList ref="messageListRef" />
-      <InputBar :running="running" @send="send" @cancel="cancel" />
+      <InputBar :running="running" @send="send" @cancel="handleCancel" />
     </div>
   </div>
 </template>

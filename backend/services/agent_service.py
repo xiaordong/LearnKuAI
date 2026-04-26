@@ -4,7 +4,9 @@ ThreadPoolExecutor 运行同步 agent_loop，
 通过 queue.Queue 将事件传递到 asyncio.Queue 供 WebSocket 推送。
 """
 import asyncio
+import os
 import queue
+import signal
 import threading
 from concurrent.futures import ThreadPoolExecutor
 
@@ -20,6 +22,11 @@ executor = ThreadPoolExecutor(max_workers=4)
 
 # 跟踪活跃任务，用于取消
 _active_tasks: dict[str, threading.Event] = {}
+
+
+def shutdown():
+    """强制关闭线程池，不等待正在执行的任务"""
+    executor.shutdown(wait=False, cancel_futures=True)
 
 
 def _run_agent(session_id: str, message: str, event_queue: queue.Queue, cancel_event: threading.Event):
@@ -47,14 +54,11 @@ async def start_agent(session_id: str, message: str, async_queue: asyncio.Queue)
     cancel_event = threading.Event()
     _active_tasks[session_id] = cancel_event
 
-    loop = asyncio.get_event_loop()
-
     # 在线程池中运行同步 agent
     future = executor.submit(_run_agent, session_id, message, sync_queue, cancel_event)
 
     # 桥接：sync_queue → asyncio_queue
     while True:
-        # 非阻塞检查同步队列
         try:
             event = sync_queue.get_nowait()
         except queue.Empty:

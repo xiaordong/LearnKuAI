@@ -3,6 +3,7 @@ import { ref } from 'vue'
 
 export interface AgentEvent {
   type: 'thinking' | 'tool_call' | 'tool_result' | 'done' | 'error'
+  tool_call_id?: string
   tool?: string
   args?: string
   result?: string
@@ -74,7 +75,6 @@ export function useWebSocket(getWsUrl: () => string) {
       console.warn('[WS] 未连接，尝试重连...')
       errorMsg.value = '未连接，正在重连...'
       connect()
-      // 等连接成功再发
       const doSend = () => {
         if (ws.value && ws.value.readyState === WebSocket.OPEN) {
           running.value = true
@@ -85,6 +85,13 @@ export function useWebSocket(getWsUrl: () => string) {
         }
       }
       ws.value?.addEventListener('open', doSend, { once: true })
+      // 5 秒超时：连不上就放弃
+      setTimeout(() => {
+        if (!connected.value) {
+          errorMsg.value = '连接超时，请检查后端'
+          running.value = false
+        }
+      }, 5000)
       return
     }
     running.value = true

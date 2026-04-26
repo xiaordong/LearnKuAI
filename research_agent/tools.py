@@ -12,6 +12,7 @@ log = logging.getLogger("agent.tools")
 
 # 线程局部变量，用于传递当前 session_id
 _thread_local = threading.local()
+_search_lock = threading.Lock()  # DDGS 不支持并发，搜索必须序列化
 
 
 def set_log_context(session_id: str):
@@ -78,15 +79,16 @@ def read_plan() -> str:
 
 
 def search(keywords: str, region: str = "wt-wt", timelimit: str | None = None, max_results: int = 10) -> str:
-    start = datetime.now()
-    results = DDGS().text(
-        query=keywords,
-        region=region,
-        timelimit=timelimit,
-        max_results=max_results
-    )
-    elapsed = int((datetime.now() - start).total_seconds() * 1000)
-    _log_info("搜索完成", tool_name="search", duration_ms=elapsed)
+    with _search_lock:
+        start = datetime.now()
+        results = DDGS().text(
+            query=keywords,
+            region=region,
+            timelimit=timelimit,
+            max_results=max_results
+        )
+        elapsed = int((datetime.now() - start).total_seconds() * 1000)
+        _log_info("搜索完成", tool_name="search", duration_ms=elapsed)
     formatted = []
     for i, item in enumerate(results, 1):
         formatted.append(f"{i}. [{item['title']}]({item['href']})\n  {item['body']}")
@@ -103,8 +105,16 @@ def _is_safe_url(url: str) -> bool:
     if host.lower() in blocked:
         return False
     # 禁止私有 IP 段
-    if host.startswith("192.168.") or host.startswith("10.") or host.startswith("172."):
+    if host.startswith("192.168.") or host.startswith("10."):
         return False
+    if host.startswith("172."):
+        # 172.16.0.0/12 是私有地址段（172.16 ~ 172.31），其他是公网
+        try:
+            second_octet = int(host.split(".")[1])
+            if 16 <= second_octet <= 31:
+                return False
+        except (ValueError, IndexError):
+            pass
     return True
 
 

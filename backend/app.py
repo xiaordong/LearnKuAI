@@ -31,3 +31,10 @@ app.include_router(ws_router)
 @app.get("/api/health")
 def health():
     return {"status": "ok"}
+
+
+@app.on_event("shutdown")
+def on_shutdown():
+    """关闭时强制清理线程池，防止进程卡死"""
+    from backend.services.agent_service import shutdown
+    shutdown()

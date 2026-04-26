@@ -27,7 +27,8 @@ def api_download_note(note_id: int):
     note = get_note(note_id)
     if not note:
         raise HTTPException(404, "笔记不存在")
-    filename = note["title"].replace("/", "_").replace("\\", "_")
+    # 过滤文件名中的特殊字符，防止头注入
+    filename = note["title"].replace("/", "_").replace("\\", "_").replace('"', "'")
     return PlainTextResponse(
         content=note["content"],
         media_type="text/markdown",

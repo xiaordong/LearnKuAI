@@ -17,7 +17,7 @@ const store = useSessionStore()
 const messages = ref<Message[]>([])
 const listRef = ref<HTMLElement>()
 const isThinking = ref(false)
-const streamingToolCalls = ref<{ tool: string; args: string; result?: string; duration_ms?: number }[]>([])
+const streamingToolCalls = ref<Map<string, { tool: string; args: string; result?: string; duration_ms?: number }>>(new Map())
 
 async function loadMessages(sessionId: string) {
   try {
@@ -27,7 +27,7 @@ async function loadMessages(sessionId: string) {
     messages.value = []
   }
   isThinking.value = false
-  streamingToolCalls.value = []
+  streamingToolCalls.value = new Map()
   await nextTick()
   scrollToBottom()
 }
@@ -46,27 +46,28 @@ function handleEvent(event: AgentEvent) {
       break
     case 'tool_call':
       isThinking.value = false
-      streamingToolCalls.value.push({
+      streamingToolCalls.value.set(event.tool_call_id || Math.random().toString(), {
         tool: event.tool || '',
         args: event.args || '',
       })
       break
     case 'tool_result':
-      const last = streamingToolCalls.value[streamingToolCalls.value.length - 1]
-      if (last) {
-        last.result = event.result
-        last.duration_ms = event.duration_ms
+      if (event.tool_call_id) {
+        const tc = streamingToolCalls.value.get(event.tool_call_id)
+        if (tc) {
+          tc.result = event.result
+          tc.duration_ms = event.duration_ms
+        }
       }
       break
     case 'done':
       isThinking.value = false
-      streamingToolCalls.value = []
-      // 重新加载完整消息
+      streamingToolCalls.value.clear()
       if (store.currentId) loadMessages(store.currentId)
       return
     case 'error':
       isThinking.value = false
-      streamingToolCalls.value = []
+      streamingToolCalls.value.clear()
       return
   }
   nextTick(scrollToBottom)
@@ -77,7 +78,7 @@ watch(() => store.currentId, (id) => {
   else {
     messages.value = []
     isThinking.value = false
-    streamingToolCalls.value = []
+    streamingToolCalls.value = new Map()
   }
 })
 
@@ -97,9 +98,9 @@ defineExpose({ messages, scrollToBottom, loadMessages, handleEvent })
         :message="msg"
       />
       <!-- 实时工具调用 -->
-      <div v-if="streamingToolCalls.length" class="streaming-events">
-        <div class="streaming-label">正在执行...</div>
-        <div v-for="(tc, i) in streamingToolCalls" :key="'s'+i" class="streaming-tool">
+      <div v-if="streamingToolCalls.size" class="streaming-events">
+        <div class="streaming-label">正在执行 ({{ streamingToolCalls.size }} 个任务并行)...</div>
+        <div v-for="[id, tc] in streamingToolCalls" :key="id" class="streaming-tool">
           <div class="tool-header">
             <span class="tool-badge">{{ tc.tool }}</span>
             <span v-if="tc.duration_ms" class="tool-duration">{{ tc.duration_ms }}ms</span>
