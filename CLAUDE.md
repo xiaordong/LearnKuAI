@@ -16,7 +16,7 @@
 - 使用 GLM（智谱）大模型，通过 OpenAI 兼容接口调用
 - 使用 OpenAI Python SDK，base_url 指向智谱
 - 模型：glm-4.7
-- 项目目标：构建智能研究助手（Research Agent），分 5 个阶段循序渐进
+- 项目目标：构建智能研究助手（Research Agent），分 6 个阶段循序渐进
 - 用户负责编码实现，你负责设计指导
 
 ## 必读文件
@@ -66,3 +66,6 @@
 - 优先可读性，避免过早抽象
 - 不添加未请求的功能或"改进"
 - 提交信息使用中文
+- 注意 SDK 对象（如 ChatCompletionMessage）需 model_dump() 转 dict 再使用
+- DDGS 搜索不支持并发，需用 Lock 序列化
+- Ctrl+C 必须能在任何时刻中断程序（API 重试、sleep、工具执行期间）

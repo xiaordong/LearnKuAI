@@ -420,10 +420,11 @@ Agent Final Answer:
 ### 阶段 5：生产增强
 - 状态：✅ 已完成
 - 笔记：
-  - 日志系统：logging 同时输出到控制台和 agent.log，记录 API 耗时、工具调用、错误
-  - API 重试：指数退避（1s → 2s → 4s），最多 3 次
+  - 日志系统：SQLite 日志持久化（agent_logs 表），分层 logger（agent.core.api / agent.core.agent）
+  - LoggerAdapter 的 extra 合并问题：Python 原生 LoggerAdapter 会覆盖而非合并 extra，需自定义 MergeAdapter
+  - API 重试：指数退避（1s → 2s → 4s），最多 3 次，支持 KeyboardInterrupt 中断
   - 安全护栏：工具调用校验层（工具名、必填参数、类型检查、URL 安全校验）
-  - SSRF 防护：fetch_page 禁止访问 localhost、私有 IP 段
+  - SSRF 防护：fetch_page 禁止访问 localhost、私有 IP 段（172.16-172.31 范围修正）
   - 自愈机制：结构化错误信息（JSON + hint），LLM 读取后自行修正
   - 降级回退：fetch_page 失败时 LLM 自动降级到搜索摘要回答
   - CSS/JS 清理：fetch_page 移除 style/script 块，避免无用信息污染上下文
@@ -440,6 +441,14 @@ Agent Final Answer:
   - 笔记存储：从文件系统迁移到 SQLite 数据库
   - 部署：Docker Compose（前端 Nginx + 后端 Uvicorn）
   - event_callback 最小侵入设计：agent_loop 新增可选参数，不破坏 CLI 兼容性
+  - 并行工具执行：ThreadPoolExecutor 并发调用多个独立工具，DDGS 搜索用 Lock 序列化
+  - 单工具超时保护：daemon 线程 + join(timeout=30)，防止工具挂死
+  - 工具结果截断 3000 字符，上下文压缩阈值 30K 字符
+  - SDK 对象转 dict：choice.message.model_dump() 后再 append，避免混合类型
+  - WebSocket 每条消息独立 event_queue，取消立即响应
+  - Ctrl+C 可中断：API 重试和 sleep 期间均支持 KeyboardInterrupt
+  - 会话标题：首条用户消息前 30 字符自动生成，agent 完成后前端刷新
+  - 线程池 shutdown 时 cancel_futures=True，防止进程卡死
 
 ---
 
