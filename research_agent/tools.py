@@ -8,6 +8,9 @@ from pathlib import Path
 import httpx
 from ddgs import DDGS
 
+from research_agent.memory import save_plan as _save_plan, load_plan as _load_plan
+from research_agent.memory import save_note_db, read_note_db, list_notes_db
+
 log = logging.getLogger("agent.tools")
 
 # 线程局部变量，用于传递当前 session_id
@@ -33,49 +36,35 @@ def _log_warning(msg: str, **extra):
 NOTES_DIR   = Path("notes")
 NOTES_DIR.mkdir(exist_ok=True)
 
-PLAN_FILE = Path("memory") / "current_plan.md"
-PLAN_FILE.parent.mkdir(exist_ok=True)
-
 def save_note(title: str, content: str) -> str:
-    # 清理文件名中的特殊字符
-    title = title.replace("/", "_").replace("\\", "_")
-    file_path = NOTES_DIR / f"{title}.md"
-    with open(file_path, "w", encoding="utf-8") as f:
-        f.write(content)
-    return f"笔记已保存至 {file_path}"
+    return save_note_db(title, content, getattr(_thread_local, "session_id", None))
 
 
 def read_note(title: str) -> str:
-    # 清理文件名，和保存时保持一致
-    title = title.replace("/", "_").replace("\\", "_")
-    file_path = NOTES_DIR / f"{title}.md"
-    try:
-        return file_path.read_text(encoding="utf-8")
-    except FileNotFoundError:
-        return f"笔记不存在: {title}"
+    return read_note_db(title)
 
 
 def list_notes() -> str:
-    notes = list(NOTES_DIR.glob("*.md"))
-    if not notes:
-        return "暂无笔记"
-    return "\n".join(f.stem for f in notes)
+    return list_notes_db()
 
 def get_current_time()->str:
     return datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 
 
 def update_plan(plan: str) -> str:
-    """创建或更新当前研究计划"""
-    PLAN_FILE.write_text(plan, encoding="utf-8")
+    """创建或更新当前研究计划（按会话隔离）"""
+    session_id = getattr(_thread_local, "session_id", None)
+    if session_id:
+        _save_plan(session_id, plan)
     return "计划已更新"
 
 
 def read_plan() -> str:
-    """读取当前研究计划"""
-    if not PLAN_FILE.exists():
-        return "当前没有研究计划"
-    return PLAN_FILE.read_text(encoding="utf-8")
+    """读取当前研究计划（按会话隔离）"""
+    session_id = getattr(_thread_local, "session_id", None)
+    if session_id:
+        return _load_plan(session_id)
+    return "当前没有研究计划"
 
 
 def search(keywords: str, region: str = "wt-wt", timelimit: str | None = None, max_results: int = 10) -> str:

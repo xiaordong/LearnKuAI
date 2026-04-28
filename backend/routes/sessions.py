@@ -1,8 +1,16 @@
 """会话 CRUD 路由"""
+from datetime import datetime
+
 from fastapi import APIRouter, HTTPException
-from research_agent.memory import new_session, list_sessions, load_session, save_session
+from pydantic import BaseModel, Field
+from research_agent.memory import new_session, list_sessions, load_session, save_session, get_db
 
 router = APIRouter(tags=["sessions"])
+
+
+class SessionUpdate(BaseModel):
+    """更新会话标题的请求体"""
+    title: str = Field(min_length=1, description="会话标题")
 
 
 @router.get("/sessions")
@@ -30,33 +38,23 @@ def api_get_session(session_id: str):
 @router.delete("/sessions/{session_id}")
 def api_delete_session(session_id: str):
     """删除会话"""
-    from research_agent.memory import _get_conn
-    conn = _get_conn()
-    conn.execute("DELETE FROM messages WHERE session_id=?", (session_id,))
-    cursor = conn.execute("DELETE FROM sessions WHERE id=?", (session_id,))
-    conn.commit()
-    conn.close()
-    if cursor.rowcount == 0:
-        raise HTTPException(404, "会话不存在")
+    with get_db() as conn:
+        conn.execute("DELETE FROM messages WHERE session_id=?", (session_id,))
+        cursor = conn.execute("DELETE FROM sessions WHERE id=?", (session_id,))
+        if cursor.rowcount == 0:
+            raise HTTPException(404, "会话不存在")
     return {"ok": True}
 
 
 @router.patch("/sessions/{session_id}")
-def api_update_session(session_id: str, body: dict):
+def api_update_session(session_id: str, body: SessionUpdate):
     """更新会话标题"""
-    title = body.get("title", "")
-    if not title:
-        raise HTTPException(400, "标题不能为空")
-    from research_agent.memory import _get_conn
-    from datetime import datetime
     now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-    conn = _get_conn()
-    cursor = conn.execute(
-        "UPDATE sessions SET title=?, updated_at=? WHERE id=?",
-        (title, now, session_id)
-    )
-    conn.commit()
-    conn.close()
-    if cursor.rowcount == 0:
-        raise HTTPException(404, "会话不存在")
+    with get_db() as conn:
+        cursor = conn.execute(
+            "UPDATE sessions SET title=?, updated_at=? WHERE id=?",
+            (body.title, now, session_id)
+        )
+        if cursor.rowcount == 0:
+            raise HTTPException(404, "会话不存在")
     return {"ok": True}

@@ -181,6 +181,19 @@ def _error_hint(tool_name: str, error: Exception) -> str:
     return hints.get(tool_name, "请尝试其他方式完成任务")
 
 
+def _smart_truncate(text: str, max_length: int = 3000) -> str:
+    """智能截断：在截断边界附近找换行符，避免截断在段落中间"""
+    if len(text) <= max_length:
+        return text
+    # 在边界附近 ±200 字符范围找最后一个换行符
+    search_start = max(0, max_length - 200)
+    search_end = min(len(text), max_length + 200)
+    boundary = text.rfind("\n", search_start, search_end)
+    if boundary > max_length // 2:
+        return text[:boundary] + "\n\n[内容已截断]"
+    return text[:max_length] + "\n\n[内容已截断]"
+
+
 def agent_loop(session_id: str, user_message: str, max_iterations: int = 30, event_callback=None) -> str:
     # 创建带 session_id 的 LoggerAdapter，后续所有日志自动关联会话
     adapter = MergeAdapter(log_agent, {"session_id": session_id})
@@ -298,8 +311,8 @@ def agent_loop(session_id: str, user_message: str, max_iterations: int = 30, eve
                             results.append((call_id, "unknown", f"执行失败: {e}", 0))
 
             # 按原始 tool_call 顺序组装消息（API 要求顺序一致）
-            # 单个工具结果截断到 3000 字符，防止撑爆上下文
-            result_map = {call_id: result[:3000] for call_id, _, result, _ in results}
+            # 单个工具结果智能截断，防止撑爆上下文
+            result_map = {call_id: _smart_truncate(result) for call_id, _, result, _ in results}
             for tool_call in tool_calls_list:
                 messages.append({
                     "role": "tool",

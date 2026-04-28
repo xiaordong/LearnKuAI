@@ -10,14 +10,6 @@ import signal
 import threading
 from concurrent.futures import ThreadPoolExecutor
 
-from research_agent.tools import TOOL_FUNCTIONS
-from backend.services.note_service import save_note_db, read_note_db, list_notes_db
-
-# 运行时替换笔记工具为数据库版本（不修改 tools.py 源码）
-TOOL_FUNCTIONS["save_note"] = save_note_db
-TOOL_FUNCTIONS["read_note"] = read_note_db
-TOOL_FUNCTIONS["list_notes"] = list_notes_db
-
 executor = ThreadPoolExecutor(max_workers=4)
 
 # 跟踪活跃任务，用于取消
