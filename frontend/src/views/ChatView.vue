@@ -54,7 +54,12 @@ store.fetchSessions()
     <div class="chat-main">
       <!-- 连接状态栏 -->
       <div v-if="store.currentId && !connected && !running" class="status-bar warn">
-        {{ errorMsg || 'WebSocket 未连接，请检查后端是否运行' }}
+        {{ errorMsg || 'WebSocket 未连接，请等待自动重连...' }}
+      </div>
+      <!-- 会话操作错误 -->
+      <div v-if="store.error" class="status-bar error">
+        {{ store.error }}
+        <button class="dismiss-btn" @click="store.clearError()">×</button>
       </div>
       <MessageList ref="messageListRef" />
       <InputBar :running="running" @send="send" @cancel="handleCancel" />
@@ -82,5 +87,21 @@ store.fetchSessions()
   background: rgba(234, 179, 8, 0.1);
   color: var(--warning);
   border-bottom: 1px solid var(--border);
+}
+.status-bar.error {
+  background: rgba(239, 68, 68, 0.1);
+  color: var(--error);
+  border-bottom: 1px solid var(--border);
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+.dismiss-btn {
+  background: none;
+  border: none;
+  color: var(--text-muted);
+  cursor: pointer;
+  font-size: 14px;
+  padding: 0 4px;
 }
 </style>

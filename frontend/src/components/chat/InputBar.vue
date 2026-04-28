@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref } from 'vue'
+import { ref, nextTick } from 'vue'
 
 const props = defineProps<{ running: boolean }>()
 const emit = defineEmits<{
@@ -8,12 +8,25 @@ const emit = defineEmits<{
 }>()
 
 const input = ref('')
+const textareaRef = ref<HTMLTextAreaElement>()
+
+function autoResize() {
+  const el = textareaRef.value
+  if (!el) return
+  el.style.height = 'auto'
+  el.style.height = Math.min(el.scrollHeight, 120) + 'px'
+}
 
 function handleSend() {
   const text = input.value.trim()
   if (!text) return
   emit('send', text)
   input.value = ''
+  nextTick(() => {
+    if (textareaRef.value) {
+      textareaRef.value.style.height = 'auto'
+    }
+  })
 }
 
 function handleKeydown(e: KeyboardEvent) {
@@ -28,10 +41,12 @@ function handleKeydown(e: KeyboardEvent) {
   <div class="input-bar">
     <div class="input-wrapper">
       <textarea
+        ref="textareaRef"
         v-model="input"
         placeholder="输入消息... (Enter 发送, Shift+Enter 换行)"
         rows="1"
         @keydown="handleKeydown"
+        @input="autoResize"
         :disabled="running"
       />
       <button v-if="!running" class="send-btn" @click="handleSend" :disabled="!input.trim()">

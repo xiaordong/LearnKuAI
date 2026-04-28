@@ -1,4 +1,4 @@
-/** WebSocket 连接管理 */
+/** WebSocket 连接管理，支持自动重连 */
 import { ref } from 'vue'
 
 export interface AgentEvent {
@@ -20,8 +20,33 @@ export function useWebSocket(getWsUrl: () => string) {
   const errorMsg = ref('')
   let onEventCb: ((event: AgentEvent) => void) | null = null
 
+  // 重连相关状态
+  let reconnectTimer: ReturnType<typeof setTimeout> | null = null
+  let reconnectDelay = 1000  // 初始 1s
+  const maxReconnectDelay = 30000  // 最大 30s
+  let intentionalClose = false  // 区分手动/意外关闭
+
+  function clearReconnectTimer() {
+    if (reconnectTimer) {
+      clearTimeout(reconnectTimer)
+      reconnectTimer = null
+    }
+  }
+
+  function scheduleReconnect() {
+    if (intentionalClose) return
+    clearReconnectTimer()
+    console.log(`[WS] ${reconnectDelay / 1000}s 后重连...`)
+    reconnectTimer = setTimeout(() => {
+      reconnectDelay = Math.min(reconnectDelay * 2, maxReconnectDelay)
+      connect()
+    }, reconnectDelay)
+  }
+
   function connect() {
     disconnect()
+    intentionalClose = false
+    reconnectDelay = 1000
     const url = getWsUrl()
     if (!url) return
 
@@ -32,11 +57,13 @@ export function useWebSocket(getWsUrl: () => string) {
       console.log('[WS] 已连接')
       connected.value = true
       errorMsg.value = ''
+      reconnectDelay = 1000  // 重置退避
     }
 
     socket.onclose = (e) => {
       console.log('[WS] 断开:', e.code, e.reason)
       connected.value = false
+      scheduleReconnect()
     }
 
     socket.onerror = () => {
@@ -63,6 +90,8 @@ export function useWebSocket(getWsUrl: () => string) {
   }
 
   function disconnect() {
+    intentionalClose = true
+    clearReconnectTimer()
     if (ws.value) {
       ws.value.close()
       ws.value = null
@@ -72,8 +101,7 @@ export function useWebSocket(getWsUrl: () => string) {
 
   function send(content: string) {
     if (!ws.value || ws.value.readyState !== WebSocket.OPEN) {
-      console.warn('[WS] 未连接，尝试重连...')
-      errorMsg.value = '未连接，正在重连...'
+      errorMsg.value = '未连接，请等待自动重连...'
       connect()
       const doSend = () => {
         if (ws.value && ws.value.readyState === WebSocket.OPEN) {
@@ -85,7 +113,6 @@ export function useWebSocket(getWsUrl: () => string) {
         }
       }
       ws.value?.addEventListener('open', doSend, { once: true })
-      // 5 秒超时：连不上就放弃
       setTimeout(() => {
         if (!connected.value) {
           errorMsg.value = '连接超时，请检查后端'

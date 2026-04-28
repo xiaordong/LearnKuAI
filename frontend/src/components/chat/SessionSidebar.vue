@@ -3,6 +3,11 @@ import { useSessionStore } from '../../stores/session'
 import { NButton, NSpin } from 'naive-ui'
 
 const store = useSessionStore()
+
+function handleDelete(id: string, title: string) {
+  if (!window.confirm(`确定删除会话「${title || '无标题'}」吗？此操作不可撤销。`)) return
+  store.deleteSession(id)
+}
 </script>
 
 <template>
@@ -10,6 +15,11 @@ const store = useSessionStore()
     <div class="sidebar-header">
       <span class="sidebar-title">会话</span>
       <NButton size="small" quaternary @click="store.createSession()">新建</NButton>
+    </div>
+    <!-- 错误提示 -->
+    <div v-if="store.error" class="error-bar">
+      {{ store.error }}
+      <button class="dismiss-btn" @click="store.clearError()">×</button>
     </div>
     <div class="session-list">
       <NSpin v-if="!store.sessions.length" size="small" />
@@ -22,7 +32,7 @@ const store = useSessionStore()
       >
         <div class="session-title">{{ s.title || '无标题' }}</div>
         <div class="session-time">{{ s.updated_at?.slice(5, 16) }}</div>
-        <button class="delete-btn" @click.stop="store.deleteSession(s.id)" title="删除">×</button>
+        <button class="delete-btn" @click.stop="handleDelete(s.id, s.title)" title="删除">×</button>
       </div>
     </div>
   </div>
@@ -46,6 +56,24 @@ const store = useSessionStore()
 .sidebar-title {
   font-size: 14px;
   font-weight: 600;
+}
+.error-bar {
+  padding: 8px 12px;
+  font-size: 12px;
+  color: var(--error);
+  background: rgba(239, 68, 68, 0.1);
+  border-bottom: 1px solid var(--border);
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+.dismiss-btn {
+  background: none;
+  border: none;
+  color: var(--text-muted);
+  cursor: pointer;
+  font-size: 14px;
+  padding: 0 4px;
 }
 .session-list {
   flex: 1;

@@ -18,23 +18,36 @@ const selectedNote = ref<any>(null)
 const loading = ref(false)
 
 async function fetchNotes() {
-  const data = await notesApi.list() as any
-  notes.value = data
+  try {
+    const data = await notesApi.list() as any
+    notes.value = data
+  } catch (e: any) {
+    console.error('[NotesView] 加载笔记失败:', e)
+  }
 }
 
 async function selectNote(id: number) {
   loading.value = true
   try {
     selectedNote.value = await notesApi.get(id)
+  } catch (e: any) {
+    console.error('[NotesView] 加载笔记详情失败:', e)
   } finally {
     loading.value = false
   }
 }
 
 async function handleDelete(id: number) {
-  await notesApi.delete(id)
-  if (selectedNote.value?.id === id) selectedNote.value = null
-  await fetchNotes()
+  const note = notes.value.find(n => n.id === id)
+  const title = note?.title || '此笔记'
+  if (!window.confirm(`确定删除笔记「${title}」吗？此操作不可撤销。`)) return
+  try {
+    await notesApi.delete(id)
+    if (selectedNote.value?.id === id) selectedNote.value = null
+    await fetchNotes()
+  } catch (e: any) {
+    console.error('[NotesView] 删除笔记失败:', e)
+  }
 }
 
 onMounted(fetchNotes)
