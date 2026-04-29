@@ -5,11 +5,10 @@ import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from openai import OpenAI
 import config
-from research_agent.tools import TOOL_FUNCTIONS, get_tools, _is_safe_url, set_log_context
+from research_agent.tools import TOOL_FUNCTIONS, get_tools, set_log_context
 from research_agent.memory import (
-    new_session, load_session, save_session,
-    list_sessions, estimate_char_count, compress_messages,
-    SQLiteHandler
+    load_session, save_session,
+    estimate_char_count, compress_messages, SQLiteHandler
 )
 
 # 分层 logger：api 记录 API 调用，agent 记录循环控制
@@ -141,11 +140,6 @@ def validate_tool_call(tool_name: str, arguments_json: str) -> str | None:
                     continue
                 return f"参数 {key} 类型错误: 期望 {expected_type}, 实际 {type(value).__name__}"
 
-    # 4. URL 安全校验
-    if tool_name == "fetch_page" and "url" in args:
-        if not _is_safe_url(args["url"]):
-            return f"请求被拒绝: 不允许访问内网地址 ({args['url']})"
-
     return None
 
 
@@ -156,6 +150,8 @@ def execute_tool(tool_name: str, arguments_json: str, adapter: logging.LoggerAda
         start = time.time()
         result = func(**args)
         elapsed_ms = int((time.time() - start) * 1000)
+        adapter.info(f"工具 {tool_name} 完成，耗时 {elapsed_ms}ms",
+                     extra={"tool_name": tool_name, "duration_ms": elapsed_ms})
         return str(result)
     except Exception as e:
         error_type = type(e).__name__
@@ -166,12 +162,12 @@ def execute_tool(tool_name: str, arguments_json: str, adapter: logging.LoggerAda
             "error": str(e),
             "error_type": error_type,
             "tool": tool_name,
-            "hint": _error_hint(tool_name, e)
+            "hint": _error_hint(tool_name)
         }, ensure_ascii=False)
 
 
-def _error_hint(tool_name: str, error: Exception) -> str:
-    """根据错误类型返回修复建议"""
+def _error_hint(tool_name: str) -> str:
+    """根据工具名返回错误修复建议"""
     hints = {
         "search": "请尝试更换关键词或稍后重试",
         "fetch_page": "网页无法访问，建议使用搜索结果中的摘要信息继续回答",
@@ -267,13 +263,10 @@ def agent_loop(session_id: str, user_message: str, max_iterations: int = 30, eve
 
                 start_ts = time.time()
                 # 单工具超时保护（30秒），防止 DDGS 等工具无限挂起
-                _tool_result = [None]
-                _tool_error = [None]
+                _tool_result = None
                 def _exec():
-                    try:
-                        _tool_result[0] = execute_tool(name, args_json, adapter)
-                    except Exception as e:
-                        _tool_error[0] = e
+                    nonlocal _tool_result
+                    _tool_result = execute_tool(name, args_json, adapter)
                 t = threading.Thread(target=_exec, daemon=True)
                 t.start()
                 t.join(timeout=30)
@@ -284,10 +277,8 @@ def agent_loop(session_id: str, user_message: str, max_iterations: int = 30, eve
                         "tool": name,
                         "hint": "请尝试减少搜索范围或稍后重试"
                     }, ensure_ascii=False)
-                elif _tool_error[0]:
-                    result = f"执行失败: {_tool_error[0]}"
                 else:
-                    result = _tool_result[0]
+                    result = _tool_result
                 duration_ms = int((time.time() - start_ts) * 1000)
                 _emit({"type": "tool_result", "tool_call_id": tc.id, "tool": name,
                        "result": result[:500], "duration_ms": duration_ms})

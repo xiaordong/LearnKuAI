@@ -64,7 +64,7 @@ def read_plan() -> str:
     session_id = getattr(_thread_local, "session_id", None)
     if session_id:
         return _load_plan(session_id)
-    return "当前没有研究计划"
+    return "当前没有研究计划，需要创建合理有效的研究计划"
 
 
 def search(keywords: str, region: str = "wt-wt", timelimit: str | None = None, max_results: int = 10) -> str:
@@ -85,44 +85,75 @@ def search(keywords: str, region: str = "wt-wt", timelimit: str | None = None, m
 
 
 def _is_safe_url(url: str) -> bool:
-    """检查 URL 是否安全（禁止访问内网地址）"""
+    """严格检查 URL 是否安全，禁止访问内网、私有IP、回环地址，防止 SSRF"""
     from urllib.parse import urlparse
     parsed = urlparse(url)
-    host = parsed.hostname or ""
-    # 禁止内网地址
-    blocked = ["localhost", "127.0.0.1", "0.0.0.0", "::1"]
-    if host.lower() in blocked:
+    host = parsed.hostname
+
+    if not host:
         return False
-    # 禁止私有 IP 段
-    if host.startswith("192.168.") or host.startswith("10."):
+
+    host = host.lower()
+
+    # 回环/本地域名黑名单
+    blocked_hosts = {
+        "localhost", "127.0.0.1", "0.0.0.0", "::1",
+        "0:0:0:0:0:0:0:1", "[::1]",
+    }
+    if host in blocked_hosts:
         return False
-    if host.startswith("172."):
-        # 172.16.0.0/12 是私有地址段（172.16 ~ 172.31），其他是公网
-        try:
-            second_octet = int(host.split(".")[1])
-            if 16 <= second_octet <= 31:
-                return False
-        except (ValueError, IndexError):
-            pass
+
+    # IPv6 本地地址
+    if host.startswith("::") or host.startswith("[::"):
+        return False
+
+    # 私有 IPv4 段
+    private_ip_patterns = [
+        re.compile(r"^10\.\d{1,3}\.\d{1,3}\.\d{1,3}$"),
+        re.compile(r"^192\.168\.\d{1,3}\.\d{1,3}$"),
+        re.compile(r"^172\.(1[6-9]|2[0-9]|3[0-1])\.\d{1,3}\.\d{1,3}$"),
+        re.compile(r"^127\.\d{1,3}\.\d{1,3}\.\d{1,3}$"),
+        re.compile(r"^169\.254\.\d{1,3}\.\d{1,3}$"),
+    ]
+    for pattern in private_ip_patterns:
+        if pattern.match(host):
+            return False
+
     return True
 
 
 def fetch_page(url: str) -> str:
     """抓取网页内容，返回纯文本"""
+    # 1. 先做 URL 安全校验（SSRF 防护）
+    if not _is_safe_url(url):
+        return f"请求被拒绝: 不允许访问内网地址 ({url})"
+
     start = datetime.now()
     headers = {
         "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36"
     }
-    resp = httpx.get(url, headers=headers, timeout=10, follow_redirects=True)
+
+    # 2. 异常捕获：超时、连接失败、DNS 错误等
+    try:
+        resp = httpx.get(url, headers=headers, timeout=10, follow_redirects=True)
+    except httpx.TimeoutException:
+        return "请求超时，请稍后重试或使用搜索结果中的摘要信息"
+    except httpx.ConnectError:
+        return "连接失败，目标服务器不可达"
+    except httpx.TooManyRedirects:
+        return "重定向次数过多，请检查 URL 是否正确"
+    except Exception as e:
+        return f"请求失败: {type(e).__name__}: {e}"
+
     elapsed = int((datetime.now() - start).total_seconds() * 1000)
     if resp.status_code != 200:
         _log_warning(f"请求失败 状态码:{resp.status_code}", tool_name="fetch_page", duration_ms=elapsed)
         return f"请求失败，状态码: {resp.status_code}"
+
     html = resp.text
-    # 先移除 style 和 script 块（连同内容）
-    html = re.sub(r"<style[^>]*>.*?</style>", "", html, flags=re.DOTALL)
-    html = re.sub(r"<script[^>]*>.*?</script>", "", html, flags=re.DOTALL)
-    # 再去掉剩余 HTML 标签
+    # 3. HTML 清理（大小写不敏感）
+    html = re.sub(r"<style[^>]*>.*?</style>", "", html, flags=re.DOTALL | re.IGNORECASE)
+    html = re.sub(r"<script[^>]*>.*?</script>", "", html, flags=re.DOTALL | re.IGNORECASE)
     text = re.sub(r"<[^>]+>", "", html)
     # 压缩多余空白
     text = re.sub(r"\s+", " ", text).strip()
@@ -140,7 +171,7 @@ def get_tools():
             "type":"function",
             "function":{
                 "name":"get_current_time",
-                "description":"获取当前日期和时间",
+                "description":"获取当前日期和时间,用户明确提出'最新','最近',或类似表达时必须调用",
                 "parameters":{
                     "type":"object",
                     "properties":{},
@@ -152,7 +183,7 @@ def get_tools():
             "type": "function",
             "function": {
                 "name": "search",
-                "description": "使用 DuckDuckGo 搜索引擎搜索互联网信息，返回相关网页的标题、链接和摘要。当需要查找最新信息、事实数据或研究主题相关内容时使用此工具。",
+                "description": "使用搜索引擎搜索互联网信息，返回相关网页的标题、链接和摘要。当需要查找最新信息、事实数据或研究主题相关内容时使用此工具。",
                 "parameters": {
                     "type": "object",
                     "properties": {

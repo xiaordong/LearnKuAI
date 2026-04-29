@@ -9,12 +9,18 @@ from pathlib import Path
 DB_PATH = Path("memory") / "sessions.db"
 DB_PATH.parent.mkdir(exist_ok=True)
 
+# WAL 模式是持久设置，只需设置一次
+_wal_initialized = False
+
 
 def _get_conn() -> sqlite3.Connection:
     """获取数据库连接"""
+    global _wal_initialized
     conn = sqlite3.connect(str(DB_PATH))
     conn.row_factory = sqlite3.Row
-    conn.execute("PRAGMA journal_mode=WAL")
+    if not _wal_initialized:
+        conn.execute("PRAGMA journal_mode=WAL")
+        _wal_initialized = True
     return conn
 
 
@@ -132,12 +138,13 @@ def _to_dict(msg) -> dict:
 
 def new_session() -> str:
     """创建新会话，返回 session_id"""
-    session_id = datetime.now().strftime("session_%Y%m%d_%H%M%S")
-    now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    now = datetime.now()
+    session_id = now.strftime("session_%Y%m%d_%H%M%S")
+    now_str = now.strftime("%Y-%m-%d %H:%M:%S")
     with get_db() as conn:
         conn.execute(
             "INSERT INTO sessions (id, title, created_at, updated_at) VALUES (?, '', ?, ?)",
-            (session_id, now, now)
+            (session_id, now_str, now_str)
         )
     return session_id
 
